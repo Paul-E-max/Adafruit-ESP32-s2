@@ -8,6 +8,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&family=JetBrains+Mono&display=swap"
     rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
   <style>
     :root {
       --bg-dark: #0a0b10;
@@ -362,10 +363,39 @@
       border-color: var(--primary);
       background: rgba(0, 242, 255, 0.05);
     }
+
+    /* Toast Notification */
+    .toast {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background: rgba(0, 230, 118, 0.9);
+      color: white;
+      padding: 1rem 1.5rem;
+      border-radius: 0.75rem;
+      font-weight: 600;
+      opacity: 0;
+      transform: translateY(-20px);
+      transition: all 0.3s;
+      pointer-events: none;
+      z-index: 1000;
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .toast.error {
+      background: rgba(255, 0, 0, 0.9);
+    }
   </style>
 </head>
 
 <body>
+  <div id="toast" class="toast"></div>
   <div class="app">
     <header class="header">
       <div class="title">
@@ -381,11 +411,22 @@
 
     <!-- LIVE TEST VIEW -->
     <main class="main" id="liveView">
-      <div class="card chart-area">
-        <canvas id="spectralChart"></canvas>
-        <div style="margin-top:1rem; display:flex; gap:1rem; align-items:center;">
-          <span style="color:var(--text-dim)">Peak:</span>
-          <span id="livePeak" style="font-family:'JetBrains Mono';font-size:1.2rem;color:var(--warning)">--</span>
+      <div style="display:flex; flex-direction:column; gap:1.5rem; min-width:0;">
+        <div class="card chart-area">
+          <div class="section-title">Spectral Analysis (AS7341)</div>
+          <canvas id="spectralChart"></canvas>
+          <div style="margin-top:1rem; display:flex; gap:1rem; align-items:center;">
+            <span style="color:var(--text-dim)">Peak:</span>
+            <span id="livePeak" style="font-family:'JetBrains Mono';font-size:1.2rem;color:var(--warning)">--</span>
+          </div>
+        </div>
+        <div class="card chart-area">
+          <div class="section-title">Broadband Analysis (TSL2591)</div>
+          <canvas id="tslChart"></canvas>
+        </div>
+        <div class="card chart-area">
+          <div class="section-title">UV Intensity (LTR390)</div>
+          <canvas id="uvChart"></canvas>
         </div>
       </div>
       <aside class="sidebar">
@@ -401,10 +442,17 @@
             <div class="live-box"><span class="val" id="lF7">0</span><span class="lbl">F7</span></div>
             <div class="live-box"><span class="val" id="lF8">0</span><span class="lbl">F8</span></div>
           </div>
-          <div style="margin-top:0.75rem; display:flex; gap:1rem;">
-            <div class="live-box" style="flex:1"><span class="val" id="lUV">0</span><span class="lbl">UV</span></div>
-            <div class="live-box" style="flex:1"><span class="val" id="lALS">0</span><span class="lbl">ALS</span></div>
-            <div class="live-box" style="flex:1"><span class="val" id="lLux">0</span><span class="lbl">Lux</span></div>
+          <div style="margin-top:0.75rem; display:flex; gap:0.5rem; flex-wrap: wrap;">
+            <div class="live-box" style="flex:1; min-width: 60px;"><span class="val" id="lUV">0</span><span
+                class="lbl">UV</span></div>
+            <div class="live-box" style="flex:1; min-width: 60px;"><span class="val" id="lALS">0</span><span
+                class="lbl">ALS</span></div>
+            <div class="live-box" style="flex:1; min-width: 60px;"><span class="val" id="lLux">0</span><span
+                class="lbl">Lux</span></div>
+            <div class="live-box" style="flex:1; min-width: 60px;"><span class="val" id="lIR">0</span><span
+                class="lbl">IR (Counts)</span></div>
+            <div class="live-box" style="flex:1; min-width: 60px;"><span class="val" id="lFull">0</span><span
+                class="lbl">Full (Counts)</span></div>
           </div>
         </div>
         <div class="card">
@@ -442,9 +490,21 @@
   </div>
 
   <script>
+    // Register Plugin
+    Chart.register(ChartDataLabels);
+
     // Constants & Utils
     const WAVELENGTHS = { F1: 415, F2: 445, F3: 480, F4: 515, F5: 555, F6: 590, F7: 630, F8: 680 };
-    const COLORS = ['#4B0082', '#0000FF', '#00FF00', '#FFFF00', '#FFA500', '#FF0000', '#8B0000', '#4B0000'];
+    // Updated Colors: 415(Violet), 445(Blue), 480(Cyan), 515(Green), 555(Lime), 590(Orange), 630(Red), 680(Deep Red)
+    const COLORS = ['#7600bc', '#1f24d3', '#00d4ff', '#00cc00', '#aaff00', '#ffcc00', '#ff0000', '#990000'];
+
+    // Toast Notification
+    function showToast(message, isError = false) {
+      const toast = document.getElementById('toast');
+      toast.textContent = message;
+      toast.className = 'toast show' + (isError ? ' error' : '');
+      setTimeout(() => toast.className = 'toast', 3000);
+    }
 
     // State
     let liveTests = [];
@@ -459,7 +519,122 @@
     const liveChart = new Chart(liveCtx, {
       type: 'bar',
       data: { labels: Object.keys(WAVELENGTHS).map(k => WAVELENGTHS[k] + 'nm'), datasets: [{ data: [0, 0, 0, 0, 0, 0, 0, 0], backgroundColor: COLORS, borderRadius: 6 }] },
-      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#909090' } }, x: { grid: { display: false }, ticks: { color: '#909090' } } } }
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          datalabels: {
+            color: '#fff',
+            anchor: 'end',
+            align: 'top',
+            offset: 4,
+            font: { size: 10, weight: 'bold' },
+            formatter: (v) => v > 0 ? v : ''
+          }
+        },
+        scales: {
+          y: { beginAtZero: true, grace: '20%', grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#909090' } },
+          x: { grid: { display: false }, ticks: { color: '#909090' } }
+        }
+      }
+    });
+
+    // TSL Chart
+    const tslCtx = document.getElementById('tslChart').getContext('2d');
+    const tslChart = new Chart(tslCtx, {
+      type: 'bar',
+      data: {
+        labels: ['Full Spectrum', 'Infrared'],
+        datasets: [{
+          data: [0, 0],
+          backgroundColor: ['#ffffff', '#ff4444'],
+          borderRadius: 6,
+          barPercentage: 0.5
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          datalabels: {
+            color: '#fff',
+            anchor: 'end',
+            align: 'top',
+            offset: 4,
+            font: { size: 10, weight: 'bold' },
+            formatter: (v) => v.toFixed(0)
+          }
+        },
+        scales: {
+          y: {
+            beginAtZero: true,
+            grace: '20%',
+            title: { display: true, text: 'Raw Counts', color: '#909090' },
+            grid: { color: 'rgba(255,255,255,0.05)' },
+            ticks: { color: '#909090' }
+          },
+          x: {
+            grid: { display: false },
+            ticks: { color: '#909090' }
+          }
+        }
+      }
+    });
+
+    // UV Chart
+    const uvCtx = document.getElementById('uvChart').getContext('2d');
+    const uvChart = new Chart(uvCtx, {
+      type: 'line',
+      data: {
+        labels: Array(50).fill(''),
+        datasets: [{
+          label: 'UV Intensity',
+          data: Array(50).fill(0),
+          borderColor: '#00f2ff',
+          backgroundColor: 'rgba(0, 242, 255, 0.1)',
+          fill: true,
+          tension: 0.4,
+          pointRadius: 0
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          datalabels: {
+            color: '#000',
+            backgroundColor: '#00f2ff',
+            borderRadius: 4,
+            padding: 4,
+            align: 'top',
+            anchor: 'center',
+            offset: 8,
+            font: { size: 12, weight: 'bold' },
+            // Show label on the peak value in the current dataset
+            display: function (context) {
+              const data = context.dataset.data;
+              const val = data[context.dataIndex];
+              const max = Math.max(...data);
+              return val === max && max > 0 && context.dataIndex === data.lastIndexOf(max);
+            },
+            formatter: (val) => 'PEAK UV: ' + val
+          }
+        },
+        scales: {
+          y: {
+            beginAtZero: true,
+            grace: '10%',
+            grid: { color: 'rgba(255,255,255,0.05)' },
+            ticks: { color: '#909090' }
+          },
+          x: {
+            display: false
+          }
+        }
+      }
     });
 
     function detectPeak(data) {
@@ -473,10 +648,21 @@
     function updateLiveUI(d) {
       liveChart.data.datasets[0].data = [d.F1, d.F2, d.F3, d.F4, d.F5, d.F6, d.F7, d.F8];
       liveChart.update('none');
+
+      tslChart.data.datasets[0].data = [d.TSL_Full || 0, d.TSL_IR || 0];
+      tslChart.update('none');
+
+      // UV Update
+      uvChart.data.datasets[0].data.push(d.UV || 0);
+      uvChart.data.datasets[0].data.shift();
+      uvChart.update('none');
+
       ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8'].forEach(k => document.getElementById('l' + k).textContent = d[k] || 0);
       document.getElementById('lUV').textContent = d.UV || 0;
       document.getElementById('lALS').textContent = d.ALS || 0;
       document.getElementById('lLux').textContent = (d.TSL_Lux || 0).toFixed(1);
+      document.getElementById('lIR').textContent = d.TSL_IR || 0;
+      document.getElementById('lFull').textContent = d.TSL_Full || 0;
       const peak = detectPeak(d);
       document.getElementById('livePeak').textContent = peak.wavelength + 'nm (' + peak.channel + ')';
     }
@@ -501,7 +687,7 @@
         document.getElementById('recordBtn').textContent = 'Record';
         if (samples.length > 0) {
           const avg = {};
-          ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'UV', 'ALS', 'TSL_Lux'].forEach(k => avg[k] = Math.round(samples.reduce((s, d) => s + (d[k] || 0), 0) / samples.length));
+          ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'UV', 'ALS', 'TSL_Lux', 'TSL_IR', 'TSL_Full'].forEach(k => avg[k] = Math.round(samples.reduce((s, d) => s + (d[k] || 0), 0) / samples.length));
           avg.name = document.getElementById('testName').value || 'Test ' + (liveTests.length + 1);
           avg.peak = detectPeak(avg);
           avg.timestamp = new Date().toISOString();
@@ -568,7 +754,7 @@
         div.className = 'report-card color-' + (idx % 3);
 
         let headerCols = '<th>Test Name</th><th>Peak</th><th>Lux</th>';
-        if (showFullDetails) headerCols += '<th>F1</th><th>F2</th><th>F3</th><th>F4</th><th>F5</th><th>F6</th><th>F7</th><th>F8</th><th>UV</th><th>ALS</th>';
+        if (showFullDetails) headerCols += '<th>F1</th><th>F2</th><th>F3</th><th>F4</th><th>F5</th><th>F6</th><th>F7</th><th>F8</th><th>UV</th><th>ALS</th><th>IR</th><th>Full</th>';
 
         div.innerHTML = `
           <div class="report-header">
@@ -596,7 +782,7 @@
             row += `
                         <td>${t.F1}</td><td>${t.F2}</td><td>${t.F3}</td><td>${t.F4}</td>
                         <td>${t.F5}</td><td>${t.F6}</td><td>${t.F7}</td><td>${t.F8}</td>
-                        <td>${t.UV}</td><td>${t.ALS}</td>
+                        <td>${t.UV}</td><td>${t.ALS}</td><td>${t.TSL_IR || 0}</td><td>${t.TSL_Full || 0}</td>
                       `;
           }
           return `<tr>${row}</tr>`;
@@ -631,10 +817,22 @@
           },
           options: {
             responsive: true, maintainAspectRatio: false,
-            plugins: { legend: { labels: { color: '#e0e0e0' } } },
+            plugins: {
+              legend: { labels: { color: '#e0e0e0' } },
+              datalabels: {
+                color: (context) => context.dataset.yAxisID === 'y' ? '#00f2ff' : '#7000ff',
+                anchor: 'end',
+                align: 'top',
+                offset: 2,
+                font: { size: 9, weight: 'bold' },
+                formatter: (v, context) => {
+                  return context.dataset.yAxisID === 'y' ? v + 'nm' : v.toFixed(0);
+                }
+              }
+            },
             scales: {
-              y: { type: 'linear', position: 'left', grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#00f2ff' } },
-              y1: { type: 'linear', position: 'right', grid: { display: false }, ticks: { color: '#7000ff' } },
+              y: { type: 'linear', position: 'left', grace: '20%', grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#00f2ff' } },
+              y1: { type: 'linear', position: 'right', grace: '20%', grid: { display: false }, ticks: { color: '#7000ff' } },
               x: { grid: { display: false }, ticks: { color: '#909090' } }
             }
           }
@@ -666,16 +864,32 @@
         connected = true;
         document.getElementById('connectBtn').textContent = 'Disconnect';
         document.getElementById('connectBtn').classList.remove('primary');
+        showToast('✓ Connected to COM port');
         readLoop();
-      } catch (e) { alert('Connection failed: ' + e.message); }
+      } catch (e) {
+        showToast('Connection failed: ' + e.message, true);
+      }
     };
 
     async function disconnect() {
-      if (reader) { await reader.cancel(); reader.releaseLock(); }
-      if (port) await port.close();
-      connected = false;
-      document.getElementById('connectBtn').textContent = 'Connect';
-      document.getElementById('connectBtn').classList.add('primary');
+      try {
+        if (reader) {
+          await reader.cancel();
+          reader.releaseLock();
+        }
+        if (port) await port.close();
+        connected = false;
+        document.getElementById('connectBtn').textContent = 'Connect';
+        document.getElementById('connectBtn').classList.add('primary');
+        showToast('✓ Disconnected successfully');
+        console.log('✓ Disconnected successfully');
+      } catch (e) {
+        console.error('Disconnect error:', e);
+        // Force disconnect state even if error
+        connected = false;
+        document.getElementById('connectBtn').textContent = 'Connect';
+        document.getElementById('connectBtn').classList.add('primary');
+      }
     }
 
     async function readLoop() {
@@ -693,7 +907,8 @@
           for (const line of lines) {
             try {
               const d = JSON.parse(line.trim());
-              if (d.F1 !== undefined) {
+              // Accept data if F1 (AS7341) OR TSL_Lux (TSL2591) is present
+              if (d.F1 !== undefined || d.TSL_Lux !== undefined) {
                 updateLiveUI(d);
                 if (recording) samples.push(d);
               }
