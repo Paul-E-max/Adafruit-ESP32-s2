@@ -1,0 +1,8 @@
+# Executables
+arduino-cli.exe
+
+# Duplicate/temp files
+spectral-report (1).json
+
+# Dependencies
+node_modules/
